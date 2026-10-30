@@ -1,0 +1,61 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Next.js & Build Outputs
+.next/
+**/.next/
+out/
+**/out/
+dist/
+**/dist/
+build/
+**/build/
+.turbo/
+**/.turbo/
+
+# Environment Variables & Sensitive Configs (CRITICAL: Do NOT commit secrets)
+.env
+.env.*
+*.env
+**/.env
+**/.env.*
+**/*.env
+!**/.env.example
+
+# Uploads & User Generated Media
+saas-backend/uploads/*
+!saas-backend/uploads/.gitkeep
+
+# Runtime Logs & Debug
+logs/
+**/logs/
+*.log
+**/*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Prisma SQLite & DB artifacts
+prisma/*.db
+prisma/*.db-journal
+**/*.db
+**/*.db-journal
+
+# TypeScript cache
+*.tsbuildinfo
+**/*.tsbuildinfo
+
+# OS & Editor Artifacts
+.DS_Store
+Thumbs.db
+.idea/
+**/.idea/
+.vscode/
+**/.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

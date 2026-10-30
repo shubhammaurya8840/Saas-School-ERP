@@ -1,0 +1,965 @@
+// Prisma Schema for Multi-Tenant School ERP SaaS Platform
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum SchoolStatus {
+  ACTIVE
+  TRIAL
+  SUSPENDED
+}
+
+enum SubscriptionPlan {
+  STARTER
+  GROWTH
+  ENTERPRISE
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  SCHOOL_ADMIN
+  TEACHER
+  STAFF
+  PARENT
+  STUDENT
+  ACCOUNTANT
+  LIBRARIAN
+}
+
+enum BookCopyStatus {
+  AVAILABLE
+  ISSUED
+  RESERVED
+  LOST
+  DAMAGED
+}
+
+enum BookIssueStatus {
+  ISSUED
+  RETURNED
+  OVERDUE
+  LOST
+}
+
+enum BorrowerType {
+  STUDENT
+  STAFF
+}
+
+enum NoticePriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum NoticeStatus {
+  DRAFT
+  PUBLISHED
+  EXPIRED
+}
+
+enum NoticeTargetAudience {
+  ALL
+  STAFF_ONLY
+  TEACHERS
+  PARENTS
+  STUDENTS
+  CLASS_SECTION
+}
+
+// 1. School Tenant Model (PRD Rule: Automated Code, Multi-Tenant Boundary)
+model School {
+  id                  String           @id @default(uuid()) @db.Uuid
+  schoolCode          String           @unique @db.VarChar(30)
+  name                String           @db.VarChar(255)
+  legalName           String?          @db.VarChar(255)
+  slug                String           @unique @db.VarChar(100)
+  board               String           @default("CBSE") @db.VarChar(50)
+  academicYear        String?          @db.VarChar(50) // Optional as per PRD Rule 2
+  city                String           @db.VarChar(100)
+  state               String           @db.VarChar(100)
+  country             String           @default("India") @db.VarChar(100)
+  timezone            String           @default("Asia/Kolkata") @db.VarChar(50)
+  currency            String           @default("INR") @db.VarChar(10)
+  status              SchoolStatus     @default(ACTIVE)
+  plan                SubscriptionPlan @default(GROWTH)
+
+  // Multi-Tenant Quotas & Limits
+  maxStudents         Int              @default(1000)
+  maxStaff            Int              @default(100)
+  storageLimitMb      Int              @default(5000)
+
+  // Independent Role-Based Upload Permissions (PRD Section 2)
+  allowStudentUploads Boolean          @default(true)
+  allowParentUploads  Boolean          @default(true)
+  allowStaffUploads   Boolean          @default(true)
+
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  // Relationships
+  users               User[]
+  students            Student[]
+  modules             SchoolModule[]
+  auditLogs           AuditLog[]
+
+  // Phase 4: Fees Management
+  feeHeads            FeeHead[]
+  feePlans            FeePlan[]
+  studentFeePlans     StudentFeePlan[]
+  feePayments         FeePayment[]
+
+  // Phase 5: Attendance & Timetable
+  classSections       ClassSection[]
+  subjects            Subject[]
+  attendances         Attendance[]
+  staffAttendances    StaffAttendance[]
+  timetableSlots      TimetableSlot[]
+  schoolHolidays      SchoolHoliday[]
+
+  // Phase 6: Exams, Marks & Report Cards
+  exams               Exam[]
+  examPapers          ExamPaper[]
+  examMarks           ExamMark[]
+  gradingRules        GradingRule[]
+
+  // Phase 7: Notices & Notifications
+  notices             Notice[]
+  noticeReads         NoticeRead[]
+
+  // Phase 8: Library Management
+  books               Book[]
+  bookCopies          BookCopy[]
+  bookIssues          BookIssue[]
+  librarySetting      LibrarySetting?
+
+  @@index([status])
+  @@index([slug])
+  @@map("schools")
+}
+
+// 2. User Model (Zero-Knowledge Invitation Tokens, Role-Based Access)
+model User {
+  id                  String       @id @default(uuid()) @db.Uuid
+  email               String       @unique @db.VarChar(255)
+  passwordHash        String?      @db.VarChar(255) // Nullable until invitation token is redeemed
+  fullName            String       @db.VarChar(255)
+  phone               String?      @db.VarChar(50)
+  role                UserRole     @default(SCHOOL_ADMIN)
+  designation         String?      @db.VarChar(100)
+  department          String?      @db.VarChar(100)
+  employeeId          String?      @db.VarChar(50)
+  isActive            Boolean      @default(true)
+
+  // Zero-Knowledge Invitation Flow
+  invitationToken     String?      @unique @db.VarChar(255)
+  invitationExpiresAt DateTime?
+
+  // Tenant Boundary (Null for Platform SuperAdmins, Required for School users)
+  schoolId            String?      @db.Uuid
+  school              School?      @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  // Parent links to students (one parent -> multiple children)
+  parentLinks         ParentStudent[] @relation("ParentUser")
+
+  // If user is a student login (Class 5+)
+  studentProfile      Student?        @relation("StudentUser")
+
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  auditLogs           AuditLog[]
+
+  // Phase 5: Attendance & Timetable
+  classTeacherSections   ClassSection[]    @relation("ClassTeacher")
+  markedAttendances      Attendance[]      @relation("AttendanceMarkedBy")
+  staffAttendances       StaffAttendance[] @relation("StaffAttendanceUser")
+  markedStaffAttendances StaffAttendance[] @relation("StaffAttendanceMarkedBy")
+  timetableSlots         TimetableSlot[]   @relation("TimetableTeacher")
+
+  // Phase 6: Exams, Marks & Report Cards
+  publishedExams         Exam[]            @relation("ExamPublishedBy")
+  enteredExamMarks       ExamMark[]        @relation("ExamMarkEnteredBy")
+
+  // Phase 7: Notices & Notifications
+  canManageNotices       Boolean           @default(false)
+  authoredNotices        Notice[]          @relation("NoticeAuthor")
+  publishedNotices       Notice[]          @relation("NoticePublishedBy")
+  noticeReads            NoticeRead[]
+
+  // Phase 8: Library Management
+  borrowedBooks          BookIssue[]       @relation("BorrowerUser")
+  issuedBooks            BookIssue[]       @relation("BookIssuedBy")
+
+  @@unique([schoolId, employeeId])
+  @@index([schoolId])
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+// 3. Student Model (Phase 3: Student Management & Parent-Child Linkage)
+model Student {
+  id                     String       @id @default(uuid()) @db.Uuid
+  admissionNumber        String       @db.VarChar(50)
+  fullName               String       @db.VarChar(255)
+  dateOfBirth            DateTime?
+  gender                 String?      @db.VarChar(20)
+  gradeLevel             String       @db.VarChar(50) // e.g. "LKG", "UKG", "Class 1" .. "Class 12"
+  section                String?      @db.VarChar(20) // e.g. "A", "B", "C"
+  rollNumber             String?      @db.VarChar(50)
+  academicYear           String?      @db.VarChar(50)
+  address                String?      @db.VarChar(255)
+  status                 String       @default("ACTIVE") @db.VarChar(50)
+
+  // Portal Access: LKG-Class 4 parent portal only; Class 5+ can have student portal login
+  hasStudentPortalAccess Boolean      @default(false)
+  studentUserId          String?      @unique @db.Uuid
+  studentUser            User?        @relation("StudentUser", fields: [studentUserId], references: [id], onDelete: SetNull)
+
+  // Tenant Boundary
+  schoolId               String       @db.Uuid
+  school                 School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  // Parent-Student Relationships
+  parents                ParentStudent[]
+
+  // Phase 4: Fees Management
+  feePlans               StudentFeePlan[]
+  feePayments            FeePayment[]
+
+  // Phase 5: Attendance & Timetable
+  classSectionId         String?          @db.Uuid
+  classSection           ClassSection?    @relation(fields: [classSectionId], references: [id], onDelete: SetNull)
+  attendances            Attendance[]
+
+  // Phase 6: Exams, Marks & Report Cards
+  examMarks              ExamMark[]
+
+  // Phase 8: Library Management
+  bookIssues             BookIssue[]
+
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+
+  @@unique([schoolId, admissionNumber])
+  @@index([schoolId])
+  @@index([gradeLevel])
+  @@index([status])
+  @@map("students")
+}
+
+// 4. ParentStudent Junction (Allows 1 Parent -> Multiple Children & vice versa)
+model ParentStudent {
+  id           String       @id @default(uuid()) @db.Uuid
+  parentId     String       @db.Uuid
+  parent       User         @relation("ParentUser", fields: [parentId], references: [id], onDelete: Cascade)
+
+  studentId    String       @db.Uuid
+  student      Student      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  relationship String       @default("GUARDIAN") @db.VarChar(50) // "FATHER", "MOTHER", "GUARDIAN"
+  isPrimary    Boolean      @default(true)
+  createdAt    DateTime     @default(now())
+
+  @@unique([parentId, studentId])
+  @@index([studentId])
+  @@index([parentId])
+  @@map("parent_students")
+}
+
+// 5. School Module Entitlements (Zero Data Loss Architecture)
+model SchoolModule {
+  id        String   @id @default(uuid()) @db.Uuid
+  schoolId  String   @db.Uuid
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  moduleKey String   @db.VarChar(100)
+  isEnabled Boolean  @default(true)
+  settings  Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([schoolId, moduleKey])
+  @@index([schoolId])
+  @@map("school_modules")
+}
+
+// 6. Audit Log Model (Platform and Tenant Audit Trail)
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  action    String   @db.VarChar(100) // e.g. "SCHOOL_REGISTERED", "STUDENT_ENROLLED"
+  entity    String   @db.VarChar(100) // e.g. "School", "User", "Student"
+  entityId  String?  @db.VarChar(255)
+  details   Json?
+  ipAddress String?  @db.VarChar(50)
+  userAgent String?  @db.VarChar(255)
+
+  userId    String?  @db.Uuid
+  user      User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  schoolId  String?  @db.Uuid
+  school    School?  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@index([schoolId])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// =========================================================================
+// PHASE 4: FEES MANAGEMENT MODELS (Tenant-Isolated, Idempotent, Immutable)
+// =========================================================================
+
+// 7. Fee Head (Categories: Tuition, Transportation, Computer Lab, Examination, etc.)
+model FeeHead {
+  id          String        @id @default(uuid()) @db.Uuid
+  schoolId    String        @db.Uuid
+  school      School        @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name        String        @db.VarChar(100)
+  code        String        @db.VarChar(50)
+  description String?       @db.VarChar(255)
+  isRecurring Boolean       @default(true)
+
+  planItems   FeePlanItem[]
+
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@unique([schoolId, code])
+  @@unique([schoolId, name])
+  @@index([schoolId])
+  @@map("fee_heads")
+}
+
+// 8. Fee Plan (Grade / Class Fee Structure for Academic Year)
+model FeePlan {
+  id                 String               @id @default(uuid()) @db.Uuid
+  schoolId           String               @db.Uuid
+  school             School               @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name               String               @db.VarChar(150)
+  academicYear       String               @db.VarChar(50)
+  applicableGrade    String?              @db.VarChar(50)
+  totalAmount        Decimal              @db.Decimal(12, 2)
+  description        String?              @db.VarChar(255)
+
+  items              FeePlanItem[]
+  installments       FeePlanInstallment[]
+  studentAssignments StudentFeePlan[]
+
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@index([schoolId])
+  @@index([applicableGrade])
+  @@map("fee_plans")
+}
+
+// 9. Fee Plan Items (Detailed Breakdown of heads within a plan)
+model FeePlanItem {
+  id        String   @id @default(uuid()) @db.Uuid
+  feePlanId String   @db.Uuid
+  feePlan   FeePlan  @relation(fields: [feePlanId], references: [id], onDelete: Cascade)
+  feeHeadId String   @db.Uuid
+  feeHead   FeeHead  @relation(fields: [feeHeadId], references: [id], onDelete: Cascade)
+  amount    Decimal  @db.Decimal(12, 2)
+
+  @@unique([feePlanId, feeHeadId])
+  @@map("fee_plan_items")
+}
+
+// 10. Fee Plan Installment (Scheduled installments with due dates & fines)
+model FeePlanInstallment {
+  id                  String                   @id @default(uuid()) @db.Uuid
+  feePlanId           String                   @db.Uuid
+  feePlan             FeePlan                  @relation(fields: [feePlanId], references: [id], onDelete: Cascade)
+  title               String                   @db.VarChar(100)
+  dueDate             DateTime
+  percentage          Decimal?                 @db.Decimal(5, 2)
+  amount              Decimal                  @db.Decimal(12, 2)
+  lateFeeFine         Decimal                  @default(0) @db.Decimal(10, 2)
+
+  studentInstallments StudentFeeInstallment[]
+
+  @@index([feePlanId])
+  @@map("fee_plan_installments")
+}
+
+// 11. Student Assigned Fee Plan (Concessions, Scholarships, Net Balance)
+model StudentFeePlan {
+  id               String                  @id @default(uuid()) @db.Uuid
+  studentId        String                  @db.Uuid
+  student          Student                 @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  feePlanId        String                  @db.Uuid
+  feePlan          FeePlan                 @relation(fields: [feePlanId], references: [id], onDelete: Cascade)
+  schoolId         String                  @db.Uuid
+  school           School                  @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  academicYear     String                  @db.VarChar(50)
+
+  // Accounting Ledger
+  grossAmount      Decimal                 @db.Decimal(12, 2)
+  concessionType   String?                 @db.VarChar(50) // "MERIT_SCHOLARSHIP", "SIBLING_CONCESSION", "STAFF_CHILD", "EWS"
+  concessionAmount Decimal                 @default(0) @db.Decimal(12, 2)
+  netAmount        Decimal                 @db.Decimal(12, 2)
+  paidAmount       Decimal                 @default(0) @db.Decimal(12, 2)
+  balanceAmount    Decimal                 @db.Decimal(12, 2)
+  status           String                  @default("PENDING") @db.VarChar(30) // "PENDING", "PARTIALLY_PAID", "PAID", "OVERDUE"
+
+  installments     StudentFeeInstallment[]
+  payments         FeePayment[]
+
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@unique([studentId, academicYear])
+  @@index([schoolId])
+  @@index([status])
+  @@map("student_fee_plans")
+}
+
+// 12. Student Fee Installment
+model StudentFeeInstallment {
+  id                 String              @id @default(uuid()) @db.Uuid
+  studentFeePlanId   String              @db.Uuid
+  studentFeePlan     StudentFeePlan      @relation(fields: [studentFeePlanId], references: [id], onDelete: Cascade)
+  planInstallmentId  String?             @db.Uuid
+  planInstallment    FeePlanInstallment? @relation(fields: [planInstallmentId], references: [id], onDelete: SetNull)
+  title              String              @db.VarChar(100)
+  dueDate            DateTime
+  amount             Decimal             @db.Decimal(12, 2)
+  paidAmount         Decimal             @default(0) @db.Decimal(12, 2)
+  status             String              @default("PENDING") @db.VarChar(30)
+
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([studentFeePlanId])
+  @@map("student_fee_installments")
+}
+
+// 13. Fee Payment (Full & Partial Payments, Idempotent, Printable Receipts, Audited Reversals)
+model FeePayment {
+  id                   String         @id @default(uuid()) @db.Uuid
+  schoolId             String         @db.Uuid
+  school               School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  studentId            String         @db.Uuid
+  student              Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  studentFeePlanId     String         @db.Uuid
+  studentFeePlan       StudentFeePlan @relation(fields: [studentFeePlanId], references: [id], onDelete: Cascade)
+
+  receiptNumber        String         @db.VarChar(50)
+  amount               Decimal        @db.Decimal(12, 2)
+  paymentMethod        String         @db.VarChar(50) // "CASH", "BANK_TRANSFER", "CHEQUE", "UPI", "DEMAND_DRAFT"
+  transactionReference String?        @db.VarChar(100)
+  paymentDate          DateTime       @default(now())
+  idempotencyKey       String?        @unique @db.VarChar(100)
+  remarks              String?        @db.VarChar(255)
+  collectedById        String?        @db.Uuid
+
+  status               String         @default("SUCCESS") @db.VarChar(30) // "SUCCESS", "REFUNDED", "REVERSED"
+  refundAmount         Decimal        @default(0) @db.Decimal(12, 2)
+  refundReason         String?        @db.VarChar(255)
+  refundedAt           DateTime?
+  refundedById         String?        @db.Uuid
+
+  // Phase 8: Library fine adjustments
+  libraryFines         BookIssue[]
+
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@unique([schoolId, receiptNumber])
+  @@index([schoolId])
+  @@index([studentId])
+  @@index([paymentDate])
+  @@map("fee_payments")
+}
+
+// =========================================================================
+// PHASE 5: ATTENDANCE & TIMETABLE MODELS (Multi-Tenant, Conflict-Free)
+// =========================================================================
+
+// 14. Class Section Model (Class + Section unit with Academic Year and Class Teacher)
+model ClassSection {
+  id             String          @id @default(uuid()) @db.Uuid
+  schoolId       String          @db.Uuid
+  school         School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  className      String          @db.VarChar(50)  // "Class 8", "Class 3", "LKG", etc.
+  section        String          @db.VarChar(20)  // "A", "B", "C"
+  room           String?         @db.VarChar(50)  // "Room 101"
+  academicYear   String          @db.VarChar(50)  // "2026-2027"
+  classTeacherId String?         @db.Uuid
+  classTeacher   User?           @relation("ClassTeacher", fields: [classTeacherId], references: [id], onDelete: SetNull)
+
+  students       Student[]
+  timetableSlots TimetableSlot[]
+  attendances    Attendance[]
+  exams          Exam[]
+  examPapers     ExamPaper[]
+  notices        Notice[]
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([schoolId, className, section, academicYear])
+  @@index([schoolId])
+  @@index([classTeacherId])
+  @@map("class_sections")
+}
+
+// 15. Subject Master (School-specific Subjects assigned to Grades)
+model Subject {
+  id              String          @id @default(uuid()) @db.Uuid
+  schoolId        String          @db.Uuid
+  school          School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name            String          @db.VarChar(100) // "Mathematics", "Science"
+  code            String          @db.VarChar(50)  // "MATH-08"
+  applicableGrade String?         @db.VarChar(50)  // "Class 8" or null for all
+  description     String?         @db.VarChar(255)
+
+  timetableSlots  TimetableSlot[]
+  examPapers      ExamPaper[]
+  examMarks       ExamMark[]
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([schoolId, code])
+  @@index([schoolId])
+  @@map("subjects")
+}
+
+// 16. Daily Student Attendance (Bulk Roll Call, Upsert, Idempotent)
+model Attendance {
+  id             String          @id @default(uuid()) @db.Uuid
+  schoolId       String          @db.Uuid
+  school         School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  studentId      String          @db.Uuid
+  student        Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  classSectionId String?         @db.Uuid
+  classSection   ClassSection?   @relation(fields: [classSectionId], references: [id], onDelete: SetNull)
+
+  date           DateTime        @db.Date
+  status         String          @db.VarChar(30) // "PRESENT", "ABSENT", "LATE", "HALF_DAY", "EXCUSED_LEAVE"
+  remarks        String?         @db.VarChar(255)
+  markedById     String?         @db.Uuid
+  markedBy       User?           @relation("AttendanceMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([schoolId, studentId, date])
+  @@index([schoolId, date])
+  @@index([classSectionId, date])
+  @@index([studentId])
+  @@map("attendances")
+}
+
+// 17. Staff & Teacher Daily Attendance (Check-in, Check-out, Status)
+model StaffAttendance {
+  id             String          @id @default(uuid()) @db.Uuid
+  schoolId       String          @db.Uuid
+  school         School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  userId         String          @db.Uuid
+  user           User            @relation("StaffAttendanceUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  date           DateTime        @db.Date
+  status         String          @db.VarChar(30) // "PRESENT", "ABSENT", "ON_LEAVE", "HALF_DAY"
+  checkIn        String?         @db.VarChar(20) // "08:15 AM"
+  checkOut       String?         @db.VarChar(20) // "03:30 PM"
+  remarks        String?         @db.VarChar(255)
+  markedById     String?         @db.Uuid
+  markedBy       User?           @relation("StaffAttendanceMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([schoolId, userId, date])
+  @@index([schoolId, date])
+  @@map("staff_attendances")
+}
+
+// 18. Timetable Slot (Monday-Saturday, up to 8 periods, Conflict Prevention)
+model TimetableSlot {
+  id             String          @id @default(uuid()) @db.Uuid
+  schoolId       String          @db.Uuid
+  school         School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  classSectionId String          @db.Uuid
+  classSection   ClassSection    @relation(fields: [classSectionId], references: [id], onDelete: Cascade)
+
+  dayOfWeek      String          @db.VarChar(20) // "MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY"
+  periodNumber   Int                             // 1 to 8
+  startTime      String          @db.VarChar(20) // "08:30"
+  endTime        String          @db.VarChar(20) // "09:15"
+  room           String?         @db.VarChar(50) // "Room 201"
+
+  subjectId      String          @db.Uuid
+  subject        Subject         @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacherId      String?         @db.Uuid
+  teacher        User?           @relation("TimetableTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
+
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@unique([classSectionId, dayOfWeek, periodNumber])
+  @@index([schoolId])
+  @@index([teacherId, dayOfWeek, periodNumber])
+  @@index([schoolId, room, dayOfWeek, periodNumber])
+  @@map("timetable_slots")
+}
+
+// 19. School Holiday Model
+model SchoolHoliday {
+  id           String          @id @default(uuid()) @db.Uuid
+  schoolId     String          @db.Uuid
+  school       School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  title        String          @db.VarChar(150) // "Diwali Break", "Independence Day"
+  startDate    DateTime        @db.Date
+  endDate      DateTime        @db.Date
+  description  String?         @db.VarChar(255)
+  academicYear String?         @db.VarChar(50)
+
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  @@index([schoolId, startDate, endDate])
+  @@map("school_holidays")
+}
+
+// =========================================================================
+// PHASE 6: EXAMS, MARKS & REPORT CARDS (Multi-Tenant, Audited)
+// =========================================================================
+
+// 20. Exam Master Model (Examination event for a Class/Section)
+model Exam {
+  id             String         @id @default(uuid()) @db.Uuid
+  schoolId       String         @db.Uuid
+  school         School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name           String         @db.VarChar(150) // "Term 1 Examination", "Mid-Term Exam", "Unit Test 1"
+  academicYear   String         @db.VarChar(50)  // "2026-2027"
+  term           String?        @db.VarChar(50)  // "TERM_1", "TERM_2", "FINAL"
+  classSectionId String         @db.Uuid
+  classSection   ClassSection   @relation(fields: [classSectionId], references: [id], onDelete: Cascade)
+
+  description    String?        @db.VarChar(255)
+  status         String         @default("DRAFT") @db.VarChar(30) // "DRAFT", "REVIEWED", "PUBLISHED"
+  publishedAt    DateTime?
+  publishedById  String?        @db.Uuid
+  publishedBy    User?          @relation("ExamPublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+
+  startDate      DateTime?      @db.Date
+  endDate        DateTime?      @db.Date
+
+  papers         ExamPaper[]
+  marks          ExamMark[]
+
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  @@index([schoolId])
+  @@index([classSectionId])
+  @@index([schoolId, academicYear])
+  @@index([status])
+  @@map("exams")
+}
+
+// 21. Exam Paper Model (Subject paper within an Exam with date, maxMarks, passingMarks)
+model ExamPaper {
+  id             String       @id @default(uuid()) @db.Uuid
+  schoolId       String       @db.Uuid
+  school         School       @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  examId         String       @db.Uuid
+  exam           Exam         @relation(fields: [examId], references: [id], onDelete: Cascade)
+  classSectionId String       @db.Uuid
+  classSection   ClassSection @relation(fields: [classSectionId], references: [id], onDelete: Cascade)
+  subjectId      String       @db.Uuid
+  subject        Subject      @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  examDate       DateTime     @db.Date
+  startTime      String?      @db.VarChar(20) // "09:00 AM"
+  endTime        String?      @db.VarChar(20) // "12:00 PM"
+  maxMarks       Float        @default(100)
+  passingMarks   Float        @default(35)
+  room           String?      @db.VarChar(50)
+
+  marks          ExamMark[]
+
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([examId, subjectId])
+  @@index([schoolId])
+  @@index([examId])
+  @@index([subjectId])
+  @@index([classSectionId])
+  @@map("exam_papers")
+}
+
+// 22. Exam Mark Model (Individual Student Marks with validation and duplicate prevention)
+model ExamMark {
+  id            String     @id @default(uuid()) @db.Uuid
+  schoolId      String     @db.Uuid
+  school        School     @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  examId        String     @db.Uuid
+  exam          Exam       @relation(fields: [examId], references: [id], onDelete: Cascade)
+  examPaperId   String     @db.Uuid
+  examPaper     ExamPaper  @relation(fields: [examPaperId], references: [id], onDelete: Cascade)
+  studentId     String     @db.Uuid
+  student       Student    @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subjectId     String     @db.Uuid
+  subject       Subject    @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  marksObtained Float
+  percentage    Float?
+  grade         String?    @db.VarChar(10) // e.g. "A+", "A", "B", etc.
+  isPassed      Boolean    @default(true)
+  remarks       String?    @db.VarChar(255)
+
+  enteredById   String?    @db.Uuid
+  enteredBy     User?      @relation("ExamMarkEnteredBy", fields: [enteredById], references: [id], onDelete: SetNull)
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([examPaperId, studentId])
+  @@unique([examId, subjectId, studentId])
+  @@index([schoolId])
+  @@index([examId])
+  @@index([studentId])
+  @@index([subjectId])
+  @@map("exam_marks")
+}
+
+// 23. Grading Rule Model (Configurable School-Level Grading Scale)
+model GradingRule {
+  id            String     @id @default(uuid()) @db.Uuid
+  schoolId      String     @db.Uuid
+  school        School     @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  name          String     @db.VarChar(100) // e.g. "CBSE 10-Point Grading Scale"
+  minPercentage Float
+  maxPercentage Float
+  grade         String     @db.VarChar(10)  // "A+", "A", "B", etc.
+  gradePoint    Float?                      // 10.0, 9.0, 8.0, etc.
+  description   String?    @db.VarChar(100) // "Outstanding", "Excellent", "Pass", "Fail"
+  isPassing     Boolean    @default(true)
+  academicYear  String?    @db.VarChar(50)
+
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@unique([schoolId, grade, academicYear])
+  @@index([schoolId])
+  @@map("grading_rules")
+}
+
+// =========================================================================
+// PHASE 7: NOTICES & NOTIFICATIONS MODELS
+// =========================================================================
+
+// 24. Notice Model
+model Notice {
+  id              String               @id @default(uuid()) @db.Uuid
+  schoolId        String               @db.Uuid
+  school          School               @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  title           String               @db.VarChar(255)
+  message         String               @db.Text
+  priority        NoticePriority       @default(NORMAL)
+  status          NoticeStatus         @default(DRAFT)
+
+  targetAudience  NoticeTargetAudience @default(ALL)
+  targetRoles     UserRole[]
+
+  // Class / Section specific targeting
+  classSectionId  String?              @db.Uuid
+  classSection    ClassSection?        @relation(fields: [classSectionId], references: [id], onDelete: SetNull)
+  targetGrade     String?              @db.VarChar(50) // e.g. "Class 8"
+
+  publishDate     DateTime             @default(now())
+  expiryDate      DateTime?
+  publishedAt     DateTime?
+  publishedById   String?              @db.Uuid
+  publishedBy     User?                @relation("NoticePublishedBy", fields: [publishedById], references: [id], onDelete: SetNull)
+
+  authorId        String               @db.Uuid
+  author          User                 @relation("NoticeAuthor", fields: [authorId], references: [id], onDelete: Cascade)
+
+  attachments     Json?
+
+  reads           NoticeRead[]
+
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([schoolId])
+  @@index([status])
+  @@index([publishDate])
+  @@index([expiryDate])
+  @@index([classSectionId])
+  @@index([authorId])
+  @@map("notices")
+}
+
+// 25. Notice Read Receipt Model (Per-user read tracking)
+model NoticeRead {
+  id        String   @id @default(uuid()) @db.Uuid
+  noticeId  String   @db.Uuid
+  notice    Notice   @relation(fields: [noticeId], references: [id], onDelete: Cascade)
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schoolId  String   @db.Uuid
+  school    School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  readAt    DateTime @default(now())
+
+  createdAt DateTime @default(now())
+
+  @@unique([noticeId, userId])
+  @@index([noticeId])
+  @@index([userId])
+  @@index([schoolId])
+  @@map("notice_reads")
+}
+
+// =========================================================================
+// PHASE 8: LIBRARY MANAGEMENT & REPORTS MODELS
+// =========================================================================
+
+// 26. Book Model (Master Catalogue)
+model Book {
+  id              String         @id @default(uuid()) @db.Uuid
+  schoolId        String         @db.Uuid
+  school          School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  isbn            String         @db.VarChar(50)
+  title           String         @db.VarChar(255)
+  author          String         @db.VarChar(255)
+  category        String         @db.VarChar(100)
+  publisher       String?        @db.VarChar(255)
+  edition         String?        @db.VarChar(50)
+  shelfLocation   String?        @db.VarChar(100)
+  description     String?        @db.Text
+  totalCopies     Int            @default(1)
+  availableCopies Int            @default(1)
+
+  copies          BookCopy[]
+  issues          BookIssue[]
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([schoolId, isbn])
+  @@index([schoolId])
+  @@index([category])
+  @@index([author])
+  @@index([title])
+  @@map("books")
+}
+
+// 27. Book Copy Model (Individual physical copy tracking with barcode/copyNumber)
+model BookCopy {
+  id           String         @id @default(uuid()) @db.Uuid
+  schoolId     String         @db.Uuid
+  school       School         @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  bookId       String         @db.Uuid
+  book         Book           @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  copyNumber   Int
+  barcode      String         @db.VarChar(100)
+  status       BookCopyStatus @default(AVAILABLE)
+  condition    String?        @db.VarChar(100)
+
+  issues       BookIssue[]
+
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  @@unique([schoolId, barcode])
+  @@unique([bookId, copyNumber])
+  @@index([schoolId])
+  @@index([bookId])
+  @@index([status])
+  @@map("book_copies")
+}
+
+// 28. Book Issue Model (Circulation: Issue, Return, Renewal, Fines & Fee Adjustments)
+model BookIssue {
+  id                 String          @id @default(uuid()) @db.Uuid
+  schoolId           String          @db.Uuid
+  school             School          @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  bookId             String          @db.Uuid
+  book               Book            @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  copyId             String          @db.Uuid
+  copy               BookCopy        @relation(fields: [copyId], references: [id], onDelete: Cascade)
+
+  borrowerType       BorrowerType    @default(STUDENT)
+  studentId          String?         @db.Uuid
+  student            Student?        @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  userId             String?         @db.Uuid
+  user               User?           @relation("BorrowerUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  issuedById         String?         @db.Uuid
+  issuedBy           User?           @relation("BookIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+
+  issuedDate         DateTime        @default(now())
+  dueDate            DateTime
+  returnedDate       DateTime?
+
+  renewalCount       Int             @default(0)
+  maxRenewals        Int             @default(2)
+
+  status             BookIssueStatus @default(ISSUED)
+
+  // Late return fines
+  finePerDay         Decimal         @default(0) @db.Decimal(10, 2)
+  fineAmount         Decimal         @default(0) @db.Decimal(10, 2)
+  isFinePaid         Boolean         @default(false)
+  finePaidAt         DateTime?
+  finePaidRemarks    String?         @db.VarChar(255)
+
+  // Audited Fee-Ledger Adjustment (Rule 4: Explicit, Audited Workflow)
+  fineAdjustedToFee  Boolean         @default(false)
+  fineFeePaymentId   String?         @db.Uuid
+  fineFeePayment     FeePayment?     @relation(fields: [fineFeePaymentId], references: [id], onDelete: SetNull)
+  fineAdjustedAt     DateTime?
+  fineAdjustedById   String?         @db.Uuid
+
+  remarks            String?         @db.VarChar(255)
+
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+
+  @@index([schoolId])
+  @@index([bookId])
+  @@index([copyId])
+  @@index([studentId])
+  @@index([userId])
+  @@index([status])
+  @@index([dueDate])
+  @@map("book_issues")
+}
+
+// 29. Library Setting Model (School-level default loan rules and fines)
+model LibrarySetting {
+  id                 String   @id @default(uuid()) @db.Uuid
+  schoolId           String   @unique @db.Uuid
+  school             School   @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+
+  defaultLoanDays    Int      @default(14)
+  maxBooksPerStudent Int      @default(3)
+  maxBooksPerStaff   Int      @default(5)
+  finePerDay         Decimal  @default(5.00) @db.Decimal(10, 2)
+  maxRenewals        Int      @default(2)
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@map("library_settings")
+}
+

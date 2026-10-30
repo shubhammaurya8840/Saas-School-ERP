@@ -1,0 +1,26 @@
+# Node dependencies
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Build output
+dist/
+
+# Environment files
+.env
+.env.*
+!**/.env.example
+
+# Uploads
+uploads/*
+!uploads/.gitkeep
+
+# Prisma artifacts
+prisma/*.db
+prisma/*.db-journal
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
